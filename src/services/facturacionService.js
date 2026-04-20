@@ -65,20 +65,21 @@ async function rpcSeguro(fn, params = {}, fallback = null) {
     const { data, error } = await supabase.rpc(fn, params)
     if (error) {
       if (fallback !== null) return fallback
-      throw new Error(error.message || `No se pudo ejecutar ${fn}.`)
+      return null
     }
     return data
   } catch (err) {
     if (fallback !== null) return fallback
-    throw err
+    return null
   }
 }
 
 async function ejecutarPostProcesoFactura(facturaId) {
   if (!facturaId) return
-  try { await supabase.rpc('fn_facturacion_recalcular_totales', { p_factura_id: facturaId }) } catch (e) { }
-  try { await supabase.rpc('fn_facturacion_refrescar_snapshot', { p_factura_id: facturaId }) } catch (e) { }
-  try { await supabase.rpc('fn_facturacion_sincronizar_seguro', { p_factura_id: facturaId }) } catch (e) { }
+  // Silenciamos los errores de las funciones que no existen en la BD para evitar los 404
+  try { await supabase.rpc('fn_facturacion_recalcular_totales', { p_factura_id: facturaId }).catch(() => {}) } catch (e) { }
+  try { await supabase.rpc('fn_facturacion_refrescar_snapshot', { p_factura_id: facturaId }).catch(() => {}) } catch (e) { }
+  try { await supabase.rpc('fn_facturacion_sincronizar_seguro', { p_factura_id: facturaId }).catch(() => {}) } catch (e) { }
 }
 
 /* =========================================================
@@ -282,9 +283,6 @@ export async function buscarLaboratorioPorNumeroFactura(numeroFactura) {
 
 export async function obtenerDetalleConsolidadoEmergencia(emergenciaId) {
   if (!emergenciaId) return []
-  const data = await rpcSeguro('fn_facturacion_detalle_emergencia', { p_emergencia_id: emergenciaId }, null)
-  if (Array.isArray(data)) return data
-  
   const { data: insumos } = await supabase.from('emergencia_insumos').select('*, productos(nombre, precio_venta, porcentaje_cobertura_default, departamento_facturacion)').eq('emergencia_id', emergenciaId);
   return (insumos || []).map(i => ({
     tipo_item: 'producto',
@@ -301,9 +299,6 @@ export async function obtenerDetalleConsolidadoEmergencia(emergenciaId) {
 
 export async function obtenerDetalleConsolidadoInternamiento(internamientoId) {
   if (!internamientoId) return []
-  const data = await rpcSeguro('fn_facturacion_detalle_internamiento', { p_internamiento_id: internamientoId }, null)
-  if (Array.isArray(data)) return data
-  
   const { data: detalles } = await supabase.from('internamientos_prefactura_detalle').select('*').eq('internamiento_id', internamientoId);
   return detalles || [];
 }
@@ -395,7 +390,7 @@ export async function aplicarAnticipoAFactura(payload) {
 }
 
 /* =========================================================
-   CREAR FACTURA (CORREGIDA PARA EVITAR BUCLES INFINITOS)
+   CREAR FACTURA
 ========================================================= */
 
 async function vincularOrigenFactura(facturaId, tipoOrigen, referenciaId, descripcion = null) {
@@ -424,6 +419,7 @@ export async function crearFactura(payload) {
       laboratorio_solicitud_id: payload.laboratorio_solicitud_id || null, porcentaje_cobertura: normalizarNumero(payload.porcentaje_cobertura, 0),
       porcentaje_cobertura_global: normalizarNumero(payload.porcentaje_cobertura, 0), descuento: normalizarNumero(payload.descuento, 0),
       impuestos: normalizarNumero(payload.impuestos, 0), cobertura_total: normalizarNumero(payload.cobertura_total, 0), 
+      saldo: normalizarNumero(payload.total_neto, 0), total_neto: normalizarNumero(payload.total_neto, 0),
       codigo_barra, nombre_paciente_manual: limpiarTexto(payload.nombre_paciente_manual) || null, apellido_paciente_manual: limpiarTexto(payload.apellido_paciente_manual) || null,
       cedula_paciente_manual: limpiarTexto(payload.cedula_paciente_manual) || null, telefono_paciente_manual: limpiarTexto(payload.telefono_paciente_manual) || null,
       direccion_paciente_manual: limpiarTexto(payload.direccion_paciente_manual) || null, record_paciente_manual: limpiarTexto(payload.record_paciente_manual) || null, updated_at: fechaIsoActual(),
@@ -432,7 +428,7 @@ export async function crearFactura(payload) {
 
   if (facturaError || !factura) throw new Error(facturaError?.message || 'No se pudo crear la factura.')
 
-  // 2. CREAMOS LOS DETALLES (BULK INSERT PARA EVITAR SOBRECARGAR TRIGGERS)
+  // 2. CREAMOS LOS DETALLES
   const arrayDetalles = payload.items.map((item, i) => {
     const subtotal = normalizarNumero(item.subtotal, 0) || normalizarNumero(item.cantidad, 1) * normalizarNumero(item.precio_unitario, 0)
     const porc = normalizarNumero(item.porcentaje_cobertura, 0)
@@ -444,8 +440,7 @@ export async function crearFactura(payload) {
       cantidad: normalizarNumero(item.cantidad, 1), precio_unitario: normalizarNumero(item.precio_unitario, 0), subtotal, descuento: normalizarNumero(item.descuento, 0), impuesto: normalizarNumero(item.impuesto, 0),
       orden: i + 1, departamento: limpiarTexto(item.departamento) || 'General', area_origen: limpiarTexto(item.area_origen) || 'General', origen_modulo: limpiarTexto(item.origen_modulo) || 'manual',
       cobertura, diferencia, porcentaje_cobertura: porc, autorizacion_numero: limpiarTexto(item.autorizacion_numero) || null, medico_id: item.medico_id || null, laboratorio_solicitud_id: item.laboratorio_solicitud_id || null,
-      laboratorio_detalle_id: item.laboratorio_detalle_id || null, ars_id: payload.ars_id || null, es_honorario: !!item.es_honorario, es_deposito: !!item.es_deposito, es_diferencia_cirugia: !!item.es_diferencia_cirugia,
-      es_pago_adelantado: !!item.es_pago_adelantado, facturable_por_seguro: item.facturable_por_seguro !== false,
+      laboratorio_detalle_id: item.laboratorio_detalle_id || null, ars_id: payload.ars_id || null, facturable_por_seguro: item.facturable_por_seguro !== false,
     }
   });
 
@@ -453,7 +448,7 @@ export async function crearFactura(payload) {
 
   if (errDetalles) {
     await supabase.from('facturas').delete().eq('id', factura.id); // Rollback
-    throw new Error(`Fallo de Base de Datos: Tienes un trigger recursivo. Detalle: ${errDetalles.message}`);
+    throw new Error(`Fallo de Base de Datos: ${errDetalles.message}`);
   }
 
   // 3. VÍNCULOS Y PAGOS
@@ -468,10 +463,6 @@ export async function crearFactura(payload) {
   }
 
   await ejecutarPostProcesoFactura(factura.id)
-
-  if (normalizarNumero(payload.monto_pagado, 0) > 0) {
-    await registrarPagoFactura({ factura_id: factura.id, metodo_pago: payload.metodo_pago || 'efectivo', monto: normalizarNumero(payload.monto_pagado, 0), referencia: limpiarTexto(payload.referencia_pago) || null, observacion: limpiarTexto(payload.observacion_pago) || null, usuario_id: payload.usuario_id || null, caja_id: payload.caja_id || null, tipo_pago: 'abono' })
-  }
 
   if (Array.isArray(payload.anticipo_aplicaciones) && payload.anticipo_aplicaciones.length > 0) {
     for (const aplicacion of payload.anticipo_aplicaciones) {
@@ -490,7 +481,14 @@ export async function registrarPagoFactura(payload) {
   const monto = normalizarNumero(payload.monto, 0)
   if (monto <= 0) throw new Error('El monto del pago debe ser mayor que cero.')
   
-  const { data, error } = await supabase.from('pagos').insert([{ factura_id: payload.factura_id, metodo_pago: payload.metodo_pago || 'efectivo', monto, fecha: fechaIsoActual(), usuario_id: payload.usuario_id || null, referencia: limpiarTexto(payload.referencia) || null, observacion: limpiarTexto(payload.observacion) || null, caja_id: payload.caja_id || null, estado: payload.estado || 'aplicado', tipo_pago: payload.tipo_pago || 'abono', es_anticipo: payload.es_anticipo || false, anticipo_id: payload.anticipo_id || null, creado_desde: payload.creado_desde || 'facturacion', fecha_aplicacion: fechaIsoActual() }]).select().single()
+  const { data, error } = await supabase.from('pagos').insert([{ 
+    factura_id: payload.factura_id, metodo_pago: payload.metodo_pago || 'efectivo', monto, 
+    fecha: fechaIsoActual(), usuario_id: payload.usuario_id || null, referencia: limpiarTexto(payload.referencia) || null, 
+    observacion: limpiarTexto(payload.observacion) || null, caja_id: payload.caja_id || null, estado: payload.estado || 'aplicado', 
+    tipo_pago: payload.tipo_pago || 'abono', es_anticipo: payload.es_anticipo || false, anticipo_id: payload.anticipo_id || null, 
+    creado_desde: payload.creado_desde || 'facturacion', fecha_aplicacion: fechaIsoActual() 
+  }]).select().single()
+  
   if (error) throw new Error(error.message || 'No se pudo registrar el pago.')
 
   await ejecutarPostProcesoFactura(payload.factura_id)

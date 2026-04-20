@@ -1,5 +1,36 @@
 import { supabase } from '../lib/supabaseClient';
 
+// --- NUEVAS FUNCIONES PARA LOS CATÁLOGOS ---
+export async function listarDiagnosticos() {
+  const { data, error } = await supabase
+    .from('diagnosticos')
+    .select('id, codigo, nombre')
+    .order('nombre', { ascending: true })
+    .limit(1000); 
+  if (error) throw new Error(error.message);
+  return data || [];
+}
+
+export async function listarMotivosConsulta() {
+  const { data, error } = await supabase
+    .from('motivos_consulta')
+    .select('id, nombre')
+    .order('nombre', { ascending: true });
+  if (error) throw new Error(error.message);
+  return data || [];
+}
+
+export async function listarProcesosClinicos() {
+  const { data, error } = await supabase
+    .from('procesos_clinicos')
+    .select('id, codigo, nombre')
+    .eq('activo', true)
+    .order('nombre', { ascending: true });
+  if (error) throw new Error(error.message);
+  return data || [];
+}
+// ------------------------------------------
+
 export async function buscarPacientesEmergencia(filtro = '') {
   let query = supabase
     .from('pacientes')
@@ -158,9 +189,13 @@ export async function listarEmergencias(filtros = {}) {
       camilla_id,
       triage_id,
       medico_id,
-      motivo,
+      motivo_id,
+      motivo_nota,
       historia,
-      diagnostico,
+      diagnostico_principal_id,
+      diagnostico_nota,
+      tratamiento_principal_id,
+      tratamiento_nota,
       estado,
       estado_clinico,
       estado_facturacion,
@@ -168,7 +203,6 @@ export async function listarEmergencias(filtros = {}) {
       fecha_ingreso,
       fecha_salida,
       updated_at,
-      tratamiento,
       facturada,
       factura_id,
       pacientes (
@@ -188,7 +222,10 @@ export async function listarEmergencias(filtros = {}) {
         id,
         codigo,
         descripcion
-      )
+      ),
+      motivos_consulta ( id, nombre ),
+      diagnosticos ( id, codigo, nombre ),
+      procesos_clinicos ( id, codigo, nombre )
     `)
     .order('fecha_ingreso', { ascending: false });
 
@@ -209,7 +246,7 @@ export async function listarEmergencias(filtros = {}) {
   if (filtros.filtro?.trim()) {
     const texto = filtros.filtro.trim();
     query = query.or(
-      `motivo.ilike.%${texto}%,diagnostico.ilike.%${texto}%,historia.ilike.%${texto}%`
+      `motivo_nota.ilike.%${texto}%,diagnostico_nota.ilike.%${texto}%,historia.ilike.%${texto}%`
     );
   }
 
@@ -232,9 +269,13 @@ export async function obtenerEmergenciaPorId(id) {
       camilla_id,
       triage_id,
       medico_id,
-      motivo,
+      motivo_id,
+      motivo_nota,
       historia,
-      diagnostico,
+      diagnostico_principal_id,
+      diagnostico_nota,
+      tratamiento_principal_id,
+      tratamiento_nota,
       estado,
       estado_clinico,
       estado_facturacion,
@@ -242,7 +283,6 @@ export async function obtenerEmergenciaPorId(id) {
       fecha_ingreso,
       fecha_salida,
       updated_at,
-      tratamiento,
       facturada,
       factura_id,
       pacientes (
@@ -300,7 +340,10 @@ export async function obtenerEmergenciaPorId(id) {
         id,
         codigo,
         descripcion
-      )
+      ),
+      motivos_consulta ( id, nombre ),
+      diagnosticos ( id, codigo, nombre ),
+      procesos_clinicos ( id, codigo, nombre )
     `)
     .eq('id', id)
     .single();
@@ -332,14 +375,22 @@ export async function crearEmergencia(payload) {
   const medicoId =
     payload.medico_id || (await resolverMedicoIdDesdeUsuario(payload.usuario_id));
 
+  // --- GENERACIÓN AUTOMÁTICA DEL NÚMERO DE EMERGENCIA ---
+  const ahora = new Date();
+  const numeroGenerado = `EME-${ahora.getFullYear()}${String(ahora.getMonth() + 1).padStart(2, '0')}${String(ahora.getDate()).padStart(2, '0')}-${String(ahora.getHours()).padStart(2, '0')}${String(ahora.getMinutes()).padStart(2, '0')}${String(ahora.getSeconds()).padStart(2, '0')}`;
+
   const datos = {
+    numero_emergencia: payload.numero_emergencia || numeroGenerado, // Solución al error null constraint
     paciente_id: payload.paciente_id,
     camilla_id: payload.camilla_id || null,
     medico_id: medicoId || null,
-    motivo: payload.motivo?.trim() || '',
+    motivo_id: payload.motivo_id || null,
+    motivo_nota: payload.motivo_nota?.trim() || '',
     historia: payload.historia?.trim() || '',
-    diagnostico: payload.diagnostico?.trim() || '',
-    tratamiento: payload.tratamiento?.trim() || '',
+    diagnostico_principal_id: payload.diagnostico_principal_id || null,
+    diagnostico_nota: payload.diagnostico_nota?.trim() || '',
+    tratamiento_principal_id: payload.tratamiento_principal_id || null,
+    tratamiento_nota: payload.tratamiento_nota?.trim() || '',
     estado: payload.estado === 'de alta' ? 'de alta' : 'abierta',
     estado_clinico: payload.estado === 'de alta' ? 'de alta' : 'abierta',
     estado_facturacion: 'sin_facturar',
@@ -389,10 +440,13 @@ export async function actualizarEmergencia(id, payload, emergenciaAnterior = nul
     paciente_id: payload.paciente_id,
     camilla_id: payload.camilla_id || null,
     medico_id: medicoId || null,
-    motivo: payload.motivo?.trim() || '',
+    motivo_id: payload.motivo_id || null,
+    motivo_nota: payload.motivo_nota?.trim() || '',
     historia: payload.historia?.trim() || '',
-    diagnostico: payload.diagnostico?.trim() || '',
-    tratamiento: payload.tratamiento?.trim() || '',
+    diagnostico_principal_id: payload.diagnostico_principal_id || null,
+    diagnostico_nota: payload.diagnostico_nota?.trim() || '',
+    tratamiento_principal_id: payload.tratamiento_principal_id || null,
+    tratamiento_nota: payload.tratamiento_nota?.trim() || '',
     estado: estadoNormalizado,
     estado_clinico: estadoNormalizado,
     fecha_salida:
@@ -670,9 +724,11 @@ export async function prepararDatosInternamientoDesdeEmergencia(emergenciaId) {
     paciente_id: emergencia.paciente_id,
     medico_id: emergencia.medico_id || null,
     origen_ingreso: 'emergencia',
-    diagnostico_ingreso: emergencia.diagnostico || '',
-    motivo_ingreso: emergencia.motivo || '',
-    tratamiento_inicial: emergencia.tratamiento || '',
+    diagnostico_ingreso_id: emergencia.diagnostico_principal_id || null,
+    diagnostico_ingreso_nota: emergencia.diagnostico_nota || '',
+    motivo_ingreso_id: emergencia.motivo_id || null,
+    motivo_ingreso_nota: emergencia.motivo_nota || '',
+    tratamiento_inicial: emergencia.tratamiento_nota || '',
     camilla_id: emergencia.camilla_id || null,
     paciente: emergencia.pacientes || null,
   };

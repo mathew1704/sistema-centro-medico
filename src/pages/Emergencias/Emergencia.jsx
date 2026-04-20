@@ -17,6 +17,9 @@ import {
   obtenerMedicoPorUsuario,
   prepararDatosInternamientoDesdeEmergencia,
   registrarSignosVitales,
+  listarDiagnosticos,
+  listarMotivosConsulta,
+  listarProcesosClinicos,
 } from '../../services/emergenciaService';
 import {
   buttonPrimaryStyle,
@@ -37,10 +40,13 @@ const modelo = {
   paciente_id: '',
   camilla_id: '',
   medico_id: '',
-  motivo: '',
+  motivo_id: '',
+  motivo_nota: '',
   historia: '',
-  diagnostico: '',
-  tratamiento: '',
+  diagnostico_principal_id: '',
+  diagnostico_nota: '',
+  tratamiento_principal_id: '',
+  tratamiento_nota: '',
   estado: 'abierto',
   fecha_salida: '',
 };
@@ -163,13 +169,18 @@ function construirHtmlImpresion({ emergencia, signos, insumos, usuarioNombre }) 
     .filter(Boolean)
     .join(', ');
 
-  const cedulaDoc =
-    paciente?.pacientes_documentos?.find((d) => d.tipo === 'cedula') ||
-    paciente?.pacientes_documentos?.find((d) => d.tipo === 'otro') ||
-    null;
+  const normalize = (str) => String(str || '').toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  const docs = paciente?.pacientes_documentos || [];
+  
+  const cedulaDoc = docs.find(d => {
+    const t = normalize(d.tipo);
+    return t.includes('cedula') || t.includes('identifica') || t.includes('documento') || t === 'otro';
+  });
 
-  const carnetDoc =
-    paciente?.pacientes_documentos?.find((d) => d.tipo === 'carnet') || null;
+  const carnetDoc = docs.find(d => {
+    const t = normalize(d.tipo);
+    return t.includes('carnet') || t.includes('seguro') || t.includes('ars');
+  });
 
   const ultimoSigno = signos?.[0] || {};
 
@@ -192,196 +203,49 @@ function construirHtmlImpresion({ emergencia, signos, insumos, usuarioNombre }) 
   const especialidad = medico?.especialidades?.nombre || 'Médico';
   const exequatur = medico?.exequatur || '';
 
+  // Combinación de catálogos y notas
+  const textoMotivo = [emergencia?.motivos_consulta?.nombre, emergencia?.motivo_nota].filter(Boolean).join(' - ');
+  const textoTratamiento = [emergencia?.procesos_clinicos?.nombre, emergencia?.tratamiento_nota].filter(Boolean).join(' - ');
+  const textoDiagnostico = [
+    emergencia?.diagnosticos?.codigo ? `[${emergencia.diagnosticos.codigo}]` : null,
+    emergencia?.diagnosticos?.nombre,
+    emergencia?.diagnostico_nota
+  ].filter(Boolean).join(' ');
+
   return `
     <html>
       <head>
         <title>Hoja de Emergencia</title>
         <style>
-          @page {
-            size: A4 portrait;
-            margin: 10mm;
-          }
-
-          body {
-            font-family: Arial, Helvetica, sans-serif;
-            color: #111;
-            margin: 0;
-            padding: 0;
-          }
-
-          .page {
-            width: 100%;
-            min-height: 100vh;
-            page-break-after: always;
-          }
-
-          .page:last-child {
-            page-break-after: auto;
-          }
-
-          .header {
-            display: flex;
-            justify-content: space-between;
-            align-items: flex-start;
-            gap: 16px;
-            border-bottom: 1px solid #000;
-            padding-bottom: 8px;
-            margin-bottom: 10px;
-          }
-
-          .logo-box {
-            width: 30%;
-            font-size: 12px;
-            line-height: 1.4;
-          }
-
-          .titulo {
-            width: 40%;
-            text-align: center;
-            font-weight: 700;
-            font-size: 28px;
-          }
-
-          .meta-box {
-            width: 30%;
-            font-size: 12px;
-            line-height: 1.5;
-          }
-
-          .row {
-            display: flex;
-            gap: 14px;
-            margin-bottom: 6px;
-            flex-wrap: wrap;
-          }
-
-          .field {
-            flex: 1;
-            min-width: 180px;
-            font-size: 13px;
-          }
-
-          .label {
-            font-weight: bold;
-            margin-right: 5px;
-          }
-
-          .section-title {
-            font-weight: bold;
-            font-size: 13px;
-            margin: 14px 0 4px;
-          }
-
-          .paragraph {
-            border: 1px solid #000;
-            min-height: 72px;
-            padding: 8px;
-            font-size: 12px;
-            line-height: 1.5;
-            white-space: pre-wrap;
-          }
-
-          .paragraph.small {
-            min-height: 52px;
-          }
-
-          .vitales {
-            display: grid;
-            grid-template-columns: repeat(6, 1fr);
-            gap: 8px;
-            border: 1px solid #000;
-            padding: 8px;
-            font-size: 12px;
-            margin-top: 4px;
-          }
-
-          .tabla {
-            width: 100%;
-            border-collapse: collapse;
-            margin-top: 8px;
-            font-size: 12px;
-          }
-
-          .tabla th,
-          .tabla td {
-            border: 1px solid #000;
-            padding: 6px;
-            vertical-align: top;
-          }
-
-          .tabla th {
-            background: #efefef;
-            text-align: left;
-          }
-
-          .firma {
-            margin-top: 40px;
-            display: flex;
-            justify-content: flex-end;
-          }
-
-          .firma-box {
-            width: 280px;
-            text-align: center;
-            font-size: 12px;
-          }
-
-          .firma-linea {
-            border-top: 1px solid #000;
-            padding-top: 6px;
-            margin-top: 40px;
-          }
-
-          .docs-title {
-            font-size: 24px;
-            font-weight: 700;
-            margin-bottom: 20px;
-            text-align: center;
-          }
-
-          .doc-grid {
-            display: grid;
-            grid-template-columns: 1fr;
-            gap: 20px;
-          }
-
-          .doc-card {
-            border: 1px solid #000;
-            padding: 12px;
-          }
-
-          .doc-card h3 {
-            margin: 0 0 10px;
-            font-size: 18px;
-          }
-
-          .doc-image-wrap {
-            width: 100%;
-            min-height: 300px;
-            border: 1px dashed #666;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            overflow: hidden;
-            background: #fafafa;
-          }
-
-          .doc-image-wrap img {
-            max-width: 100%;
-            max-height: 700px;
-            object-fit: contain;
-          }
-
-          .doc-empty {
-            color: #666;
-            font-size: 14px;
-          }
-
-          .mini {
-            font-size: 11px;
-            color: #444;
-            margin-top: 8px;
-          }
+          @page { size: A4 portrait; margin: 10mm; }
+          body { font-family: Arial, Helvetica, sans-serif; color: #111; margin: 0; padding: 0; }
+          .page { width: 100%; min-height: 100vh; page-break-after: always; }
+          .page:last-child { page-break-after: auto; }
+          .header { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; border-bottom: 1px solid #000; padding-bottom: 8px; margin-bottom: 10px; }
+          .logo-box { width: 30%; font-size: 12px; line-height: 1.4; }
+          .titulo { width: 40%; text-align: center; font-weight: 700; font-size: 28px; }
+          .meta-box { width: 30%; font-size: 12px; line-height: 1.5; }
+          .row { display: flex; gap: 14px; margin-bottom: 6px; flex-wrap: wrap; }
+          .field { flex: 1; min-width: 180px; font-size: 13px; }
+          .label { font-weight: bold; margin-right: 5px; }
+          .section-title { font-weight: bold; font-size: 13px; margin: 14px 0 4px; }
+          .paragraph { border: 1px solid #000; min-height: 72px; padding: 8px; font-size: 12px; line-height: 1.5; white-space: pre-wrap; }
+          .paragraph.small { min-height: 52px; }
+          .vitales { display: grid; grid-template-columns: repeat(6, 1fr); gap: 8px; border: 1px solid #000; padding: 8px; font-size: 12px; margin-top: 4px; }
+          .tabla { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 12px; }
+          .tabla th, .tabla td { border: 1px solid #000; padding: 6px; vertical-align: top; }
+          .tabla th { background: #efefef; text-align: left; }
+          .firma { margin-top: 40px; display: flex; justify-content: flex-end; }
+          .firma-box { width: 280px; text-align: center; font-size: 12px; }
+          .firma-linea { border-top: 1px solid #000; padding-top: 6px; margin-top: 40px; }
+          
+          /* Estilos para la segunda página de documentos (Lado a lado, más pequeños) */
+          .docs-container { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; width: 100%; margin-top: 20px; align-items: start; }
+          .doc-card { border: 2px solid #000; padding: 10px; width: auto; text-align: center; }
+          .doc-card h3 { margin: 0 0 10px; font-size: 14px; border-bottom: 1px solid #ccc; padding-bottom: 5px; }
+          .doc-image-wrap { width: 100%; height: 250px; display: flex; align-items: center; justify-content: center; background: #fafafa; border: 1px dashed #666; overflow: hidden; }
+          .doc-image-wrap img { max-width: 100%; max-height: 100%; object-fit: contain; }
+          .doc-empty { color: #666; font-style: italic; font-size: 12px; }
         </style>
       </head>
       <body>
@@ -390,9 +254,7 @@ function construirHtmlImpresion({ emergencia, signos, insumos, usuarioNombre }) 
             <div class="logo-box">
               <div style="font-weight:700; font-size:20px;">CENTRO MEDICO</div>
             </div>
-
             <div class="titulo">Hoja de Emergencia</div>
-
             <div class="meta-box">
               <div><span class="label">Fecha Ingreso:</span> ${escapeHtml(formatearFechaHora(emergencia?.fecha_ingreso))}</div>
               <div><span class="label">Admisión:</span> ${escapeHtml(paciente?.record || '')}</div>
@@ -416,7 +278,7 @@ function construirHtmlImpresion({ emergencia, signos, insumos, usuarioNombre }) 
           </div>
 
           <div class="section-title">Motivo Consulta Emergencia</div>
-          <div class="paragraph small">${escapeHtml(emergencia?.motivo || '')}</div>
+          <div class="paragraph small">${escapeHtml(textoMotivo)}</div>
 
           <div class="section-title">Historia de Enfermedad Actual</div>
           <div class="paragraph">${escapeHtml(emergencia?.historia || '')}</div>
@@ -432,10 +294,10 @@ function construirHtmlImpresion({ emergencia, signos, insumos, usuarioNombre }) 
           </div>
 
           <div class="section-title">Examen Físico / Tratamiento</div>
-          <div class="paragraph small">${escapeHtml(emergencia?.tratamiento || '')}</div>
+          <div class="paragraph small">${escapeHtml(textoTratamiento)}</div>
 
           <div class="section-title">Diagnóstico / Comentario</div>
-          <div class="paragraph small">${escapeHtml(emergencia?.diagnostico || '')}</div>
+          <div class="paragraph small">${escapeHtml(textoDiagnostico)}</div>
 
           <div class="section-title">Órdenes Médicas / Insumos Utilizados</div>
           <table class="tabla">
@@ -469,31 +331,25 @@ function construirHtmlImpresion({ emergencia, signos, insumos, usuarioNombre }) 
         </div>
 
         <div class="page">
-          <div class="docs-title">Documentos del Paciente</div>
-
-          <div class="doc-grid">
+          <h2 style="text-align: center; border-bottom: 2px solid #000; padding-bottom: 10px;">ANEXO: DOCUMENTACIÓN DEL PACIENTE</h2>
+          
+          <div class="docs-container">
             <div class="doc-card">
-              <h3>Cédula</h3>
+              <h3>DOCUMENTO DE IDENTIDAD (CÉDULA)</h3>
               <div class="doc-image-wrap">
-                ${
-                  cedulaDoc?.url
-                    ? `<img src="${escapeHtml(cedulaDoc.url)}" alt="Cédula del paciente" />`
-                    : `<div class="doc-empty">No hay imagen de cédula cargada.</div>`
-                }
+                ${cedulaDoc?.url 
+                  ? `<img src="${escapeHtml(cedulaDoc.url)}" alt="Cédula" />` 
+                  : `<div class="doc-empty">No se encontró imagen de cédula registrada para este paciente.</div>`}
               </div>
-              <div class="mini">${escapeHtml(cedulaDoc?.url || '')}</div>
             </div>
 
             <div class="doc-card">
-              <h3>Carnet / Seguro</h3>
+              <h3>CARNET DE SEGURO / ARS</h3>
               <div class="doc-image-wrap">
-                ${
-                  carnetDoc?.url
-                    ? `<img src="${escapeHtml(carnetDoc.url)}" alt="Carnet del paciente" />`
-                    : `<div class="doc-empty">No hay imagen de carnet/seguro cargada.</div>`
-                }
+                ${carnetDoc?.url 
+                  ? `<img src="${escapeHtml(carnetDoc.url)}" alt="Carnet Seguro" />` 
+                  : `<div class="doc-empty">No se encontró imagen de carnet de seguro registrada para este paciente.</div>`}
               </div>
-              <div class="mini">${escapeHtml(carnetDoc?.url || '')}</div>
             </div>
           </div>
         </div>
@@ -514,6 +370,46 @@ const Emergencia = ({ darkMode = false }) => {
   const [productos, setProductos] = useState([]);
   const [medicoActual, setMedicoActual] = useState(null);
   const [pacienteSeleccionado, setPacienteSeleccionado] = useState(null);
+
+  // Catálogos
+  const [diagnosticos, setDiagnosticos] = useState([]);
+  const [motivosConsulta, setMotivosConsulta] = useState([]);
+  const [procesosClinicos, setProcesosClinicos] = useState([]);
+
+  // ========================================================
+  // NUEVOS ESTADOS PARA AUTOCOMPLETADO
+  // ========================================================
+  const [busquedaMotivo, setBusquedaMotivo] = useState("");
+  const [mostrarMotivos, setMostrarMotivos] = useState(false);
+  const [busquedaDiagnostico, setBusquedaDiagnostico] = useState("");
+  const [mostrarDiagnosticos, setMostrarDiagnosticos] = useState(false);
+  const [busquedaTratamiento, setBusquedaTratamiento] = useState("");
+  const [mostrarTratamientos, setMostrarTratamientos] = useState(false);
+
+  const motivosFiltrados = useMemo(() => {
+    if (!busquedaMotivo) return motivosConsulta.slice(0, 50);
+    const lower = busquedaMotivo.toLowerCase();
+    return motivosConsulta.filter(m => String(m.nombre).toLowerCase().includes(lower)).slice(0, 50);
+  }, [busquedaMotivo, motivosConsulta]);
+
+  const diagnosticosFiltrados = useMemo(() => {
+    if (!busquedaDiagnostico) return diagnosticos.slice(0, 50);
+    const lower = busquedaDiagnostico.toLowerCase();
+    return diagnosticos.filter(d => 
+      String(d.nombre).toLowerCase().includes(lower) || 
+      String(d.codigo).toLowerCase().includes(lower)
+    ).slice(0, 50);
+  }, [busquedaDiagnostico, diagnosticos]);
+
+  const tratamientosFiltrados = useMemo(() => {
+    if (!busquedaTratamiento) return procesosClinicos.slice(0, 50);
+    const lower = busquedaTratamiento.toLowerCase();
+    return procesosClinicos.filter(p => 
+      String(p.nombre).toLowerCase().includes(lower) || 
+      String(p.codigo).toLowerCase().includes(lower)
+    ).slice(0, 50);
+  }, [busquedaTratamiento, procesosClinicos]);
+  // ========================================================
 
   const [busquedaPaciente, setBusquedaPaciente] = useState('');
   const [filtroHistorial, setFiltroHistorial] = useState('');
@@ -577,12 +473,18 @@ const Emergencia = ({ darkMode = false }) => {
         listaCamillas,
         listaProductos,
         medicoUsuario,
+        catDiagnosticos,
+        catMotivos,
+        catProcesos
       ] = await Promise.all([
         listarEmergencias(),
         buscarPacientesEmergencia(),
         listarCamillasDisponibles(),
         listarProductosEmergencia(),
         obtenerMedicoPorUsuario(usuario?.id),
+        listarDiagnosticos(),
+        listarMotivosConsulta(),
+        listarProcesosClinicos()
       ]);
 
       setEmergencias(listaEmergencias || []);
@@ -591,6 +493,10 @@ const Emergencia = ({ darkMode = false }) => {
       setCamillas(listaCamillas || []);
       setProductos(listaProductos || []);
       setMedicoActual(medicoUsuario || null);
+      
+      setDiagnosticos(catDiagnosticos || []);
+      setMotivosConsulta(catMotivos || []);
+      setProcesosClinicos(catProcesos || []);
 
       setFormulario((prev) => ({
         ...prev,
@@ -637,24 +543,16 @@ const Emergencia = ({ darkMode = false }) => {
 
   function cambiarCampoSignos(campo, valor) {
     let nuevoValor = valor;
-
     if (campo === 'presion') {
       nuevoValor = limpiarPresion(valor);
     } else {
       nuevoValor = limpiarNumeroTexto(valor);
     }
-
-    setSignosForm((prev) => ({
-      ...prev,
-      [campo]: nuevoValor,
-    }));
+    setSignosForm((prev) => ({ ...prev, [campo]: nuevoValor }));
   }
 
   function cambiarCampoInsumo(campo, valor) {
-    setInsumoForm((prev) => ({
-      ...prev,
-      [campo]: valor,
-    }));
+    setInsumoForm((prev) => ({ ...prev, [campo]: valor }));
   }
 
   function limpiarFormulario() {
@@ -670,6 +568,9 @@ const Emergencia = ({ darkMode = false }) => {
     setPacienteSeleccionado(null);
     setResultadosPacientes([]);
     setBusquedaPaciente('');
+    setBusquedaMotivo('');
+    setBusquedaDiagnostico('');
+    setBusquedaTratamiento('');
     setError('');
     setMensaje('');
   }
@@ -726,7 +627,6 @@ const Emergencia = ({ darkMode = false }) => {
 
   function cambiarCantidadInsumoDraft(index, valor) {
     const cantidad = Math.max(1, Number(valor || 1));
-
     setInsumosDraft((prev) =>
       prev.map((item, idx) => (idx === index ? { ...item, cantidad } : item))
     );
@@ -738,14 +638,7 @@ const Emergencia = ({ darkMode = false }) => {
   }
 
   function validarSignos() {
-    const {
-      presion,
-      temperatura,
-      pulso,
-      frecuencia_respiratoria,
-      saturacion,
-      peso,
-    } = signosForm;
+    const { presion, temperatura, pulso, frecuencia_respiratoria, saturacion, peso } = signosForm;
 
     if (presion && !/^\d{2,3}\/\d{2,3}$/.test(presion)) {
       throw new Error('La presión debe tener formato 120/80.');
@@ -777,8 +670,8 @@ const Emergencia = ({ darkMode = false }) => {
         throw new Error('Debe seleccionar un paciente.');
       }
 
-      if (!formulario.motivo?.trim()) {
-        throw new Error('Debe indicar el motivo de la consulta.');
+      if (!formulario.motivo_id && !formulario.motivo_nota?.trim()) {
+        throw new Error('Debe indicar el motivo de la consulta (selección del catálogo o texto libre).');
       }
 
       validarSignos();
@@ -830,18 +723,11 @@ const Emergencia = ({ darkMode = false }) => {
       }
 
       const haySignos =
-        signosForm.presion ||
-        signosForm.temperatura ||
-        signosForm.pulso ||
-        signosForm.frecuencia_respiratoria ||
-        signosForm.saturacion ||
-        signosForm.peso;
+        signosForm.presion || signosForm.temperatura || signosForm.pulso ||
+        signosForm.frecuencia_respiratoria || signosForm.saturacion || signosForm.peso;
 
       if (haySignos) {
-        await registrarSignosVitales({
-          emergencia_id: emergenciaId,
-          ...signosForm,
-        });
+        await registrarSignosVitales({ emergencia_id: emergenciaId, ...signosForm });
       }
 
       for (const item of insumosDraft) {
@@ -868,13 +754,20 @@ const Emergencia = ({ darkMode = false }) => {
         paciente_id: detalle.paciente_id || '',
         camilla_id: detalle.camilla_id || '',
         medico_id: detalle.medico_id || medicoActual?.id || '',
-        motivo: detalle.motivo || '',
+        motivo_id: detalle.motivo_id || '',
+        motivo_nota: detalle.motivo_nota || '',
         historia: detalle.historia || '',
-        diagnostico: detalle.diagnostico || '',
-        tratamiento: detalle.tratamiento || '',
+        diagnostico_principal_id: detalle.diagnostico_principal_id || '',
+        diagnostico_nota: detalle.diagnostico_nota || '',
+        tratamiento_principal_id: detalle.tratamiento_principal_id || '',
+        tratamiento_nota: detalle.tratamiento_nota || '',
         estado: normalizarEstado(detalle.estado_clinico || detalle.estado),
         fecha_salida: detalle.fecha_salida || '',
       });
+
+      setBusquedaMotivo(detalle.motivos_consulta?.nombre || "");
+      setBusquedaDiagnostico(detalle.diagnosticos ? `[${detalle.diagnosticos.codigo}] ${detalle.diagnosticos.nombre}` : "");
+      setBusquedaTratamiento(detalle.procesos_clinicos ? `[${detalle.procesos_clinicos.codigo}] ${detalle.procesos_clinicos.nombre}` : "");
 
       setPacienteSeleccionado(detalle.pacientes || pacienteSeleccionado || null);
       setSignos(listaSignos || []);
@@ -905,13 +798,20 @@ const Emergencia = ({ darkMode = false }) => {
         paciente_id: data.paciente_id || '',
         camilla_id: data.camilla_id || '',
         medico_id: data.medico_id || medicoActual?.id || '',
-        motivo: data.motivo || '',
+        motivo_id: data.motivo_id || '',
+        motivo_nota: data.motivo_nota || '',
         historia: data.historia || '',
-        diagnostico: data.diagnostico || '',
-        tratamiento: data.tratamiento || '',
+        diagnostico_principal_id: data.diagnostico_principal_id || '',
+        diagnostico_nota: data.diagnostico_nota || '',
+        tratamiento_principal_id: data.tratamiento_principal_id || '',
+        tratamiento_nota: data.tratamiento_nota || '',
         estado: normalizarEstado(data.estado_clinico || data.estado),
         fecha_salida: data.fecha_salida || '',
       });
+
+      setBusquedaMotivo(data.motivos_consulta?.nombre || "");
+      setBusquedaDiagnostico(data.diagnosticos ? `[${data.diagnosticos.codigo}] ${data.diagnosticos.nombre}` : "");
+      setBusquedaTratamiento(data.procesos_clinicos ? `[${data.procesos_clinicos.codigo}] ${data.procesos_clinicos.nombre}` : "");
 
       const [listaSignos, listaInsumos] = await Promise.all([
         listarSignosVitales(id),
@@ -1007,10 +907,13 @@ const Emergencia = ({ darkMode = false }) => {
             paciente_id: actual.paciente_id || '',
             camilla_id: actual.camilla_id || '',
             medico_id: actual.medico_id || '',
-            motivo: actual.motivo || '',
+            motivo_id: actual.motivo_id || '',
+            motivo_nota: actual.motivo_nota || '',
             historia: actual.historia || '',
-            diagnostico: actual.diagnostico || '',
-            tratamiento: actual.tratamiento || '',
+            diagnostico_principal_id: actual.diagnostico_principal_id || '',
+            diagnostico_nota: actual.diagnostico_nota || '',
+            tratamiento_principal_id: actual.tratamiento_principal_id || '',
+            tratamiento_nota: actual.tratamiento_nota || '',
             estado: 'de alta',
             fecha_salida: actual.fecha_salida || new Date().toISOString(),
             usuario_id: usuario?.id || null,
@@ -1051,27 +954,29 @@ const Emergencia = ({ darkMode = false }) => {
       ventana.document.write(html);
       ventana.document.close();
 
-      ventana.onload = async () => {
+      // Damos un pequeño tiempo para que las imágenes (carnet/cédula) carguen
+      setTimeout(() => {
         ventana.focus();
         ventana.print();
 
-        await marcarDeAltaSiAplica(formulario.id);
+        marcarDeAltaSiAplica(formulario.id).then(async () => {
+          const [detalleActualizado, listaEmergencias, listaCamillas] = await Promise.all([
+            obtenerEmergenciaPorId(formulario.id),
+            listarEmergencias(),
+            listarCamillasDisponibles(),
+          ]);
 
-        const [detalleActualizado, listaEmergencias, listaCamillas] = await Promise.all([
-          obtenerEmergenciaPorId(formulario.id),
-          listarEmergencias(),
-          listarCamillasDisponibles(),
-        ]);
+          setFormulario((prev) => ({
+            ...prev,
+            estado: normalizarEstado(detalleActualizado?.estado_clinico || detalleActualizado?.estado),
+            fecha_salida: detalleActualizado?.fecha_salida || prev.fecha_salida,
+          }));
+          setEmergencias(listaEmergencias || []);
+          setCamillas(listaCamillas || []);
+          setMensaje('Emergencia impresa y marcada como de alta.');
+        });
+      }, 500);
 
-        setFormulario((prev) => ({
-          ...prev,
-          estado: normalizarEstado(detalleActualizado?.estado_clinico || detalleActualizado?.estado),
-          fecha_salida: detalleActualizado?.fecha_salida || prev.fecha_salida,
-        }));
-        setEmergencias(listaEmergencias || []);
-        setCamillas(listaCamillas || []);
-        setMensaje('Emergencia impresa y marcada como de alta.');
-      };
     } catch (err) {
       setError(err.message || 'No se pudo generar la impresión.');
     } finally {
@@ -1447,11 +1352,51 @@ const Emergencia = ({ darkMode = false }) => {
       marginTop: '4px',
       lineHeight: 1.5,
     },
+    productPickerWrap: {
+      display: 'grid',
+      gridTemplateColumns: '1fr',
+      gap: '10px',
+    },
+    productResults: {
+      border: `1px solid ${colores.borde}`,
+      borderRadius: '14px',
+      background: colores.cardSoft,
+      maxHeight: '220px',
+      overflowY: 'auto',
+    },
+    productOption: {
+      padding: '10px 12px',
+      cursor: 'pointer',
+      borderBottom: `1px solid ${colores.borde}`,
+      fontSize: '13px',
+      color: colores.texto,
+    },
+    autocompleteDropdown: {
+      position: 'absolute',
+      top: '100%',
+      left: 0,
+      right: 0,
+      background: colores.cardSoft,
+      border: `1px solid ${colores.borde}`,
+      borderRadius: '8px',
+      zIndex: 50,
+      maxHeight: '220px',
+      overflowY: 'auto',
+      boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
+      marginTop: '4px'
+    },
+    autocompleteOption: {
+      padding: '10px 12px',
+      cursor: 'pointer',
+      borderBottom: `1px solid ${colores.borde}`,
+      fontSize: '13px',
+      color: colores.texto
+    }
   };
 
   return (
     <div style={pageWrapperStyle(darkMode)}>
-      <div style={styles.topBar}>
+      <div style={styles.topBar} className="hide-on-print">
         <div style={styles.titleBlock}>
           <div style={styles.titleGlow} />
           <div style={styles.titleInner}>
@@ -1485,7 +1430,7 @@ const Emergencia = ({ darkMode = false }) => {
         </div>
       </div>
 
-      <div style={styles.cardsRow}>
+      <div style={styles.cardsRow} className="hide-on-print">
         <div style={styles.metricCard}>
           <div style={styles.metricGhost}>📋</div>
           <div style={styles.metricIcon}>📋</div>
@@ -1515,7 +1460,7 @@ const Emergencia = ({ darkMode = false }) => {
         </div>
       </div>
 
-      <div style={styles.stack}>
+      <div style={styles.stack} className="hide-on-print">
         <div style={styles.card}>
           <div style={styles.cardBody}>
             <h3 style={styles.sectionTitle}>
@@ -1628,7 +1573,7 @@ const Emergencia = ({ darkMode = false }) => {
                   <div style={styles.doctorBox}>
                     {medicoActual
                       ? `${medicoActual.codigo || ''} - ${medicoActual.nombre || ''} ${medicoActual.apellido || ''}`.trim()
-                      : 'No hay médico vinculado a este usuario. Si eres admin, podrás guardar, pero revisa la tabla medicos.usuario_id.'}
+                      : 'No hay médico vinculado a este usuario.'}
                   </div>
                 </div>
 
@@ -1648,13 +1593,48 @@ const Emergencia = ({ darkMode = false }) => {
                   </div>
                 </div>
 
+                {/* AUTOCOMPLETADO: MOTIVO */}
+                <div style={{ ...styles.full, position: 'relative' }}>
+                  <label style={labelStyle(darkMode)}>Motivo de consulta (Catálogo)</label>
+                  <input
+                    style={inputStyle(darkMode)}
+                    value={busquedaMotivo}
+                    onChange={(e) => {
+                      setBusquedaMotivo(e.target.value);
+                      setMostrarMotivos(true);
+                      if(e.target.value === "") cambiarCampo("motivo_id", "");
+                    }}
+                    onFocus={() => setMostrarMotivos(true)}
+                    onBlur={() => setTimeout(() => setMostrarMotivos(false), 200)}
+                    placeholder="Buscar motivo de consulta..."
+                  />
+                  {mostrarMotivos && (
+                    <div style={styles.autocompleteDropdown}>
+                      {motivosFiltrados.length === 0 ? <div style={{ padding: '10px' }}>No hay resultados</div> :
+                        motivosFiltrados.map(m => (
+                          <div
+                            key={m.id}
+                            style={styles.autocompleteOption}
+                            onMouseDown={() => {
+                              cambiarCampo("motivo_id", m.id);
+                              setBusquedaMotivo(m.nombre);
+                              setMostrarMotivos(false);
+                            }}
+                          >
+                            {m.nombre}
+                          </div>
+                        ))
+                      }
+                    </div>
+                  )}
+                </div>
+
                 <div style={styles.full}>
-                  <label style={labelStyle(darkMode)}>Motivo de consulta</label>
+                  <label style={labelStyle(darkMode)}>Motivo de consulta (Observaciones / Texto libre)</label>
                   <textarea
                     style={textareaStyle(darkMode)}
-                    value={formulario.motivo}
-                    onChange={(e) => cambiarCampo('motivo', e.target.value)}
-                    required
+                    value={formulario.motivo_nota}
+                    onChange={(e) => cambiarCampo('motivo_nota', e.target.value)}
                   />
                 </div>
 
@@ -1667,21 +1647,93 @@ const Emergencia = ({ darkMode = false }) => {
                   />
                 </div>
 
-                <div style={styles.full}>
-                  <label style={labelStyle(darkMode)}>Diagnóstico</label>
-                  <textarea
-                    style={textareaStyle(darkMode)}
-                    value={formulario.diagnostico}
-                    onChange={(e) => cambiarCampo('diagnostico', e.target.value)}
+                {/* AUTOCOMPLETADO: DIAGNOSTICO */}
+                <div style={{ ...styles.full, position: 'relative' }}>
+                  <label style={labelStyle(darkMode)}>Diagnóstico Principal (Catálogo)</label>
+                  <input
+                    style={inputStyle(darkMode)}
+                    value={busquedaDiagnostico}
+                    onChange={(e) => {
+                      setBusquedaDiagnostico(e.target.value);
+                      setMostrarDiagnosticos(true);
+                      if(e.target.value === "") cambiarCampo("diagnostico_principal_id", "");
+                    }}
+                    onFocus={() => setMostrarDiagnosticos(true)}
+                    onBlur={() => setTimeout(() => setMostrarDiagnosticos(false), 200)}
+                    placeholder="Buscar diagnóstico por nombre o código..."
                   />
+                  {mostrarDiagnosticos && (
+                    <div style={styles.autocompleteDropdown}>
+                      {diagnosticosFiltrados.length === 0 ? <div style={{ padding: '10px' }}>No hay resultados</div> :
+                        diagnosticosFiltrados.map(d => (
+                          <div
+                            key={d.id}
+                            style={styles.autocompleteOption}
+                            onMouseDown={() => {
+                              cambiarCampo("diagnostico_principal_id", d.id);
+                              setBusquedaDiagnostico(`[${d.codigo}] ${d.nombre}`);
+                              setMostrarDiagnosticos(false);
+                            }}
+                          >
+                            <strong>[{d.codigo}]</strong> - {d.nombre}
+                          </div>
+                        ))
+                      }
+                    </div>
+                  )}
                 </div>
 
                 <div style={styles.full}>
-                  <label style={labelStyle(darkMode)}>Tratamiento / Examen físico</label>
+                  <label style={labelStyle(darkMode)}>Diagnóstico (Comentario o secundario)</label>
+                  <textarea
+                    style={textareaStyle(darkMode)}
+                    value={formulario.diagnostico_nota}
+                    onChange={(e) => cambiarCampo('diagnostico_nota', e.target.value)}
+                  />
+                </div>
+
+                {/* AUTOCOMPLETADO: TRATAMIENTO */}
+                <div style={{ ...styles.full, position: 'relative' }}>
+                  <label style={labelStyle(darkMode)}>Procedimiento / Tratamiento (Catálogo)</label>
+                  <input
+                    style={inputStyle(darkMode)}
+                    value={busquedaTratamiento}
+                    onChange={(e) => {
+                      setBusquedaTratamiento(e.target.value);
+                      setMostrarTratamientos(true);
+                      if(e.target.value === "") cambiarCampo("tratamiento_principal_id", "");
+                    }}
+                    onFocus={() => setMostrarTratamientos(true)}
+                    onBlur={() => setTimeout(() => setMostrarTratamientos(false), 200)}
+                    placeholder="Buscar tratamiento o procedimiento..."
+                  />
+                  {mostrarTratamientos && (
+                    <div style={styles.autocompleteDropdown}>
+                      {tratamientosFiltrados.length === 0 ? <div style={{ padding: '10px' }}>No hay resultados</div> :
+                        tratamientosFiltrados.map(p => (
+                          <div
+                            key={p.id}
+                            style={styles.autocompleteOption}
+                            onMouseDown={() => {
+                              cambiarCampo("tratamiento_principal_id", p.id);
+                              setBusquedaTratamiento(`[${p.codigo}] ${p.nombre}`);
+                              setMostrarTratamientos(false);
+                            }}
+                          >
+                            <strong>[{p.codigo}]</strong> - {p.nombre}
+                          </div>
+                        ))
+                      }
+                    </div>
+                  )}
+                </div>
+
+                <div style={styles.full}>
+                  <label style={labelStyle(darkMode)}>Tratamiento / Examen físico (Detalles)</label>
                   <textarea
                     style={{ ...textareaStyle(darkMode), minHeight: '100px' }}
-                    value={formulario.tratamiento}
-                    onChange={(e) => cambiarCampo('tratamiento', e.target.value)}
+                    value={formulario.tratamiento_nota}
+                    onChange={(e) => cambiarCampo('tratamiento_nota', e.target.value)}
                   />
                 </div>
 
@@ -1934,8 +1986,8 @@ const Emergencia = ({ darkMode = false }) => {
                         </td>
 
                         <td style={styles.td}>
-                          <div style={styles.mainText}>{item.motivo || '-'}</div>
-                          <div style={styles.subText}>{item.diagnostico || ''}</div>
+                          <div style={styles.mainText}>{item.motivos_consulta?.nombre || item.motivo_nota || '-'}</div>
+                          <div style={styles.subText}>{item.diagnosticos?.nombre || item.diagnostico_nota || ''}</div>
                         </td>
 
                         <td style={styles.td}>

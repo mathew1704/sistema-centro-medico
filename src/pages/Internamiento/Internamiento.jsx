@@ -20,6 +20,8 @@ import {
   obtenerInternamientoPorId,
   obtenerResumenImpresionInternamiento,
   registrarOrdenMedica,
+  listarDiagnosticos,
+  listarMotivosConsulta,
 } from "../../services/internamientoService";
 import {
   buttonPrimaryStyle,
@@ -41,7 +43,10 @@ const modeloFormulario = {
   habitacion_id: "",
   origen_ingreso: "ingreso",
   emergencia_origen_id: "",
-  diagnostico_ingreso: "",
+  diagnostico_ingreso_id: "",
+  diagnostico_ingreso_nota: "",
+  motivo_ingreso_id: "",
+  motivo_ingreso_nota: "",
   nota_ingreso: "",
   autorizacion_numero: "",
   estado: "activo",
@@ -267,6 +272,13 @@ function construirHtmlImpresionInternamiento(resumen) {
         .join("")
     : `<tr><td colspan="4">Sin analíticas registradas.</td></tr>`;
 
+  const textoMotivo = [internamiento?.motivos_consulta?.nombre, internamiento?.motivo_ingreso_nota].filter(Boolean).join(' - ');
+  const textoDiagnostico = [
+    internamiento?.diagnosticos?.codigo ? `[${internamiento.diagnosticos.codigo}]` : null,
+    internamiento?.diagnosticos?.nombre,
+    internamiento?.diagnostico_ingreso_nota
+  ].filter(Boolean).join(' ');
+
   return `
     <html>
       <head>
@@ -331,10 +343,13 @@ function construirHtmlImpresionInternamiento(resumen) {
             <div class="field"><span class="label">Origen ingreso:</span> ${escapeHtml(internamiento.origen_ingreso || "")}</div>
           </div>
 
-          <div class="section-title">Diagnóstico de ingreso</div>
-          <div class="box">${escapeHtml(internamiento.diagnostico_ingreso || "")}</div>
+          <div class="section-title">Motivo de ingreso</div>
+          <div class="box">${escapeHtml(textoMotivo)}</div>
 
-          <div class="section-title">Nota de ingreso</div>
+          <div class="section-title">Diagnóstico de ingreso</div>
+          <div class="box">${escapeHtml(textoDiagnostico)}</div>
+
+          <div class="section-title">Nota de ingreso / Tratamiento inicial</div>
           <div class="box">${escapeHtml(internamiento.nota_ingreso || "")}</div>
 
           <div class="section-title">Órdenes médicas</div>
@@ -499,6 +514,34 @@ const Internamiento = ({ darkMode = false }) => {
   const [ordenes, setOrdenes] = useState([]);
   const [medicacion, setMedicacion] = useState([]);
 
+  // Catálogos
+  const [diagnosticos, setDiagnosticos] = useState([]);
+  const [motivosConsulta, setMotivosConsulta] = useState([]);
+
+  // ========================================================
+  // NUEVOS ESTADOS PARA AUTOCOMPLETADO DE DIAGNÓSTICOS
+  // ========================================================
+  const [busquedaMotivo, setBusquedaMotivo] = useState("");
+  const [mostrarMotivos, setMostrarMotivos] = useState(false);
+  const [busquedaDiagnostico, setBusquedaDiagnostico] = useState("");
+  const [mostrarDiagnosticos, setMostrarDiagnosticos] = useState(false);
+
+  const motivosFiltrados = useMemo(() => {
+    if (!busquedaMotivo) return motivosConsulta.slice(0, 50);
+    const lower = busquedaMotivo.toLowerCase();
+    return motivosConsulta.filter(m => String(m.nombre).toLowerCase().includes(lower)).slice(0, 50);
+  }, [busquedaMotivo, motivosConsulta]);
+
+  const diagnosticosFiltrados = useMemo(() => {
+    if (!busquedaDiagnostico) return diagnosticos.slice(0, 50);
+    const lower = busquedaDiagnostico.toLowerCase();
+    return diagnosticos.filter(d => 
+      String(d.nombre).toLowerCase().includes(lower) || 
+      String(d.codigo).toLowerCase().includes(lower)
+    ).slice(0, 50);
+  }, [busquedaDiagnostico, diagnosticos]);
+  // ========================================================
+
   const [busquedaPaciente, setBusquedaPaciente] = useState("");
   const [busquedaHistorial, setBusquedaHistorial] = useState("");
   const [filtroEstado, setFiltroEstado] = useState("");
@@ -587,8 +630,10 @@ const Internamiento = ({ darkMode = false }) => {
       medico_id: state.medico_id || "",
       origen_ingreso: "emergencia",
       emergencia_origen_id: state.emergencia_id || "",
-      diagnostico_ingreso:
-        state.diagnostico_ingreso || state.motivo_ingreso || "",
+      diagnostico_ingreso_id: state.diagnostico_ingreso_id || "",
+      diagnostico_ingreso_nota: state.diagnostico_ingreso_nota || "",
+      motivo_ingreso_id: state.motivo_ingreso_id || "",
+      motivo_ingreso_nota: state.motivo_ingreso_nota || "",
       nota_ingreso: state.tratamiento_inicial || "",
       estado: "activo",
     }));
@@ -613,12 +658,16 @@ const Internamiento = ({ darkMode = false }) => {
         listaMedicos,
         listaHabitaciones,
         listaProductos,
+        catDiagnosticos,
+        catMotivos,
       ] = await Promise.all([
         listarInternamientos(),
         buscarPacientesInternamiento(),
         listarMedicosInternamiento(),
         listarHabitacionesDisponibles(),
         listarProductosInternamiento(),
+        listarDiagnosticos(),
+        listarMotivosConsulta()
       ]);
 
       setInternamientos(listaInternamientos || []);
@@ -627,6 +676,9 @@ const Internamiento = ({ darkMode = false }) => {
       setMedicos(listaMedicos || []);
       setHabitaciones(listaHabitaciones || []);
       setProductos(listaProductos || []);
+      
+      setDiagnosticos(catDiagnosticos || []);
+      setMotivosConsulta(catMotivos || []);
     } catch (err) {
       setError(err.message || "No se pudo cargar el módulo de internamiento.");
     } finally {
@@ -674,6 +726,8 @@ const Internamiento = ({ darkMode = false }) => {
     setMedicacion([]);
     setBusquedaPaciente("");
     setResultadosPacientes([]);
+    setBusquedaMotivo("");
+    setBusquedaDiagnostico("");
     setError("");
     setMensaje("");
   }
@@ -691,8 +745,8 @@ const Internamiento = ({ darkMode = false }) => {
         throw new Error("Debe seleccionar una habitación.");
       if (!formulario.medico_id)
         throw new Error("Debe seleccionar un médico responsable.");
-      if (!formulario.diagnostico_ingreso?.trim()) {
-        throw new Error("Debe indicar el diagnóstico de ingreso.");
+      if (!formulario.diagnostico_ingreso_id && !formulario.diagnostico_ingreso_nota?.trim()) {
+        throw new Error("Debe indicar el diagnóstico de ingreso (Catálogo o nota).");
       }
 
       const payload = {
@@ -739,11 +793,18 @@ const Internamiento = ({ darkMode = false }) => {
             detalle?.habitacion?.id || detalle?.camas?.habitaciones?.id || "",
           origen_ingreso: detalle.origen_ingreso || "ingreso",
           emergencia_origen_id: detalle.emergencia_origen_id || "",
-          diagnostico_ingreso: detalle.diagnostico_ingreso || "",
+          diagnostico_ingreso_id: detalle.diagnostico_ingreso_id || "",
+          diagnostico_ingreso_nota: detalle.diagnostico_ingreso_nota || "",
+          motivo_ingreso_id: detalle.motivo_ingreso_id || "",
+          motivo_ingreso_nota: detalle.motivo_ingreso_nota || "",
           nota_ingreso: detalle.nota_ingreso || "",
           autorizacion_numero: detalle.autorizacion_numero || "",
           estado: detalle?.estado || "activo",
         });
+        
+        setBusquedaMotivo(detalle.motivos_consulta?.nombre || "");
+        setBusquedaDiagnostico(detalle.diagnosticos ? `[${detalle.diagnosticos.codigo}] ${detalle.diagnosticos.nombre}` : "");
+
         setPacienteSeleccionado(detalle.pacientes || null);
         setOrdenes(listaOrdenes || []);
         setMedicacion(listaMedicacion || []);
@@ -781,11 +842,17 @@ const Internamiento = ({ darkMode = false }) => {
           data?.habitacion?.id || data?.camas?.habitaciones?.id || "",
         origen_ingreso: data.origen_ingreso || "ingreso",
         emergencia_origen_id: data.emergencia_origen_id || "",
-        diagnostico_ingreso: data.diagnostico_ingreso || "",
+        diagnostico_ingreso_id: data.diagnostico_ingreso_id || "",
+        diagnostico_ingreso_nota: data.diagnostico_ingreso_nota || "",
+        motivo_ingreso_id: data.motivo_ingreso_id || "",
+        motivo_ingreso_nota: data.motivo_ingreso_nota || "",
         nota_ingreso: data.nota_ingreso || "",
         autorizacion_numero: data.autorizacion_numero || "",
         estado: data.estado || "activo",
       });
+
+      setBusquedaMotivo(data.motivos_consulta?.nombre || "");
+      setBusquedaDiagnostico(data.diagnosticos ? `[${data.diagnosticos.codigo}] ${data.diagnosticos.nombre}` : "");
 
       setPacienteSeleccionado(data.pacientes || null);
       setBusquedaPaciente(nombreCompletoPersona(data.pacientes));
@@ -1385,6 +1452,27 @@ const Internamiento = ({ darkMode = false }) => {
       fontSize: "13px",
       color: colores.texto,
     },
+    autocompleteDropdown: {
+      position: 'absolute',
+      top: '100%',
+      left: 0,
+      right: 0,
+      background: colores.cardSoft,
+      border: `1px solid ${colores.borde}`,
+      borderRadius: '8px',
+      zIndex: 50,
+      maxHeight: '220px',
+      overflowY: 'auto',
+      boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
+      marginTop: '4px'
+    },
+    autocompleteOption: {
+      padding: '10px 12px',
+      cursor: 'pointer',
+      borderBottom: `1px solid ${colores.borde}`,
+      fontSize: '13px',
+      color: colores.texto
+    }
   };
 
   return (
@@ -1618,21 +1706,102 @@ const Internamiento = ({ darkMode = false }) => {
                   </div>
                 </div>
 
+                {/* ========================================================
+                    NUEVO AUTOCOMPLETADO: MOTIVO DE INGRESO
+                ======================================================== */}
+                <div style={{ ...styles.full, position: 'relative' }}>
+                  <label style={labelStyle(darkMode)}>Motivo de ingreso (Catálogo)</label>
+                  <input
+                    style={inputStyle(darkMode)}
+                    value={busquedaMotivo}
+                    onChange={(e) => {
+                      setBusquedaMotivo(e.target.value);
+                      setMostrarMotivos(true);
+                      if(e.target.value === "") cambiarCampo("motivo_ingreso_id", "");
+                    }}
+                    onFocus={() => setMostrarMotivos(true)}
+                    onBlur={() => setTimeout(() => setMostrarMotivos(false), 200)}
+                    placeholder="Buscar motivo de ingreso..."
+                  />
+                  {mostrarMotivos && (
+                    <div style={styles.autocompleteDropdown}>
+                      {motivosFiltrados.length === 0 ? <div style={{ padding: '10px' }}>No hay resultados</div> :
+                        motivosFiltrados.map(m => (
+                          <div 
+                            key={m.id} 
+                            style={styles.autocompleteOption}
+                            onMouseDown={() => {
+                              cambiarCampo("motivo_ingreso_id", m.id);
+                              setBusquedaMotivo(m.nombre);
+                              setMostrarMotivos(false);
+                            }}
+                          >
+                            {m.nombre}
+                          </div>
+                        ))
+                      }
+                    </div>
+                  )}
+                </div>
+
                 <div style={styles.full}>
-                  <label style={labelStyle(darkMode)}>
-                    Diagnóstico de ingreso
-                  </label>
+                  <label style={labelStyle(darkMode)}>Motivo de ingreso (Observaciones / Texto libre)</label>
                   <textarea
                     style={textareaStyle(darkMode)}
-                    value={formulario.diagnostico_ingreso}
-                    onChange={(e) =>
-                      cambiarCampo("diagnostico_ingreso", e.target.value)
-                    }
+                    value={formulario.motivo_ingreso_nota}
+                    onChange={(e) => cambiarCampo("motivo_ingreso_nota", e.target.value)}
+                  />
+                </div>
+
+                {/* ========================================================
+                    NUEVO AUTOCOMPLETADO: DIAGNÓSTICO PRINCIPAL
+                ======================================================== */}
+                <div style={{ ...styles.full, position: 'relative' }}>
+                  <label style={labelStyle(darkMode)}>Diagnóstico Principal (Catálogo)</label>
+                  <input
+                    style={inputStyle(darkMode)}
+                    value={busquedaDiagnostico}
+                    onChange={(e) => {
+                      setBusquedaDiagnostico(e.target.value);
+                      setMostrarDiagnosticos(true);
+                      if(e.target.value === "") cambiarCampo("diagnostico_ingreso_id", "");
+                    }}
+                    onFocus={() => setMostrarDiagnosticos(true)}
+                    onBlur={() => setTimeout(() => setMostrarDiagnosticos(false), 200)}
+                    placeholder="Buscar diagnóstico por nombre o código..."
+                  />
+                  {mostrarDiagnosticos && (
+                    <div style={styles.autocompleteDropdown}>
+                      {diagnosticosFiltrados.length === 0 ? <div style={{ padding: '10px' }}>No hay resultados</div> :
+                        diagnosticosFiltrados.map(d => (
+                          <div 
+                            key={d.id} 
+                            style={styles.autocompleteOption}
+                            onMouseDown={() => {
+                              cambiarCampo("diagnostico_ingreso_id", d.id);
+                              setBusquedaDiagnostico(`[${d.codigo}] ${d.nombre}`);
+                              setMostrarDiagnosticos(false);
+                            }}
+                          >
+                            <strong>[{d.codigo}]</strong> - {d.nombre}
+                          </div>
+                        ))
+                      }
+                    </div>
+                  )}
+                </div>
+
+                <div style={styles.full}>
+                  <label style={labelStyle(darkMode)}>Diagnóstico (Comentario o diagnóstico secundario)</label>
+                  <textarea
+                    style={textareaStyle(darkMode)}
+                    value={formulario.diagnostico_ingreso_nota}
+                    onChange={(e) => cambiarCampo("diagnostico_ingreso_nota", e.target.value)}
                   />
                 </div>
 
                 <div style={styles.full}>
-                  <label style={labelStyle(darkMode)}>Nota de ingreso</label>
+                  <label style={labelStyle(darkMode)}>Nota de ingreso / Tratamiento inicial</label>
                   <textarea
                     style={{ ...textareaStyle(darkMode), minHeight: 110 }}
                     value={formulario.nota_ingreso}
@@ -1642,7 +1811,7 @@ const Internamiento = ({ darkMode = false }) => {
                   />
                 </div>
 
-                <div>
+                <div style={styles.full}>
                   <label style={labelStyle(darkMode)}>
                     Número de autorización
                   </label>
@@ -2034,7 +2203,7 @@ const Internamiento = ({ darkMode = false }) => {
                     <th style={styles.th}>Paciente</th>
                     <th style={styles.th}>Habitación</th>
                     <th style={styles.th}>Médico</th>
-                    <th style={styles.th}>Diagnóstico</th>
+                    <th style={styles.th}>Motivo / Diagnóstico</th>
                     <th style={styles.th}>Estado</th>
                     <th style={styles.th}>Fecha ingreso</th>
                     <th style={styles.th}>Acciones</th>
@@ -2074,11 +2243,12 @@ const Internamiento = ({ darkMode = false }) => {
 
                         <td style={styles.td}>
                           <div style={styles.mainText}>
-                            {item.diagnostico_ingreso || "-"}
+                            {item.motivos_consulta?.nombre || item.motivo_ingreso_nota || "-"}
                           </div>
                           <div style={styles.subText}>
+                            {item.diagnosticos?.nombre || item.diagnostico_ingreso_nota || "-"}
                             {item.autorizacion_numero
-                              ? `Autorización: ${item.autorizacion_numero}`
+                              ? ` (Autorización: ${item.autorizacion_numero})`
                               : ""}
                           </div>
                         </td>

@@ -35,6 +35,7 @@ import {
   statCardStyle,
   textareaStyle,
 } from '../../styles/uiTheme';
+import { supabase } from '../../lib/supabaseClient';
 
 const modeloFactura = {
   paciente_id: '', tipo_factura: 'clinica', origen_principal: 'manual', tipo_orden: '', medico_id: '',
@@ -80,6 +81,7 @@ const Facturacion = ({ darkMode = false }) => {
   const safeInputStyle = typeof inputStyle === 'function' ? inputStyle(darkMode) : inputStyle;
   const safeSelectStyle = typeof selectStyle === 'function' ? selectStyle(darkMode) : selectStyle;
 
+  // EL FLUJO DE PESTAÑAS COMO LO PEDISTE
   const [pantalla, setPantalla] = useState('inicio');
 
   const [pendientes, setPendientes] = useState([]);
@@ -112,6 +114,15 @@ const Facturacion = ({ darkMode = false }) => {
   const [resultadosCatalogo, setResultadosCatalogo] = useState([]);
   const [cargandoCatalogo, setCargandoCatalogo] = useState(false);
 
+  // ==========================================
+  // ESTADOS DEL MÓDULO DE PAGOS
+  // ==========================================
+  const [pagosAgregados, setPagosAgregados] = useState([]);
+  const [metodoPagoInput, setMetodoPagoInput] = useState('efectivo');
+  const [montoPagoInput, setMontoPagoInput] = useState('');
+  const [referenciaPagoInput, setReferenciaPagoInput] = useState('');
+  const [procesandoPago, setProcesandoPago] = useState(false);
+
   const pacienteSeleccionado = useMemo(() => pacientes.find((p) => p.id === formFactura.paciente_id) || null, [pacientes, formFactura.paciente_id]);
 
   const subtotal = useMemo(() => items.reduce((acc, item) => acc + subtotalItem(item), 0), [items]);
@@ -123,6 +134,11 @@ const Facturacion = ({ darkMode = false }) => {
   const totalPagadas = useMemo(() => facturas.filter((f) => f.estado === 'pagada').length, [facturas]);
   const totalPendientes = useMemo(() => facturas.filter((f) => f.estado === 'pendiente' || f.estado === 'parcial').length, [facturas]);
   const totalPendientesFacturar = useMemo(() => pendientes.filter((p) => p.pendiente_facturar).length, [pendientes]);
+
+  // CÁLCULOS DE LA PANTALLA DE PAGO
+  const totalFacturaPagar = facturaSeleccionada ? Number(facturaSeleccionada.total_neto) : 0;
+  const totalPagadoAcumulado = pagosAgregados.reduce((acc, p) => acc + Number(p.monto_real), 0);
+  const restanteAPagar = Math.max(totalFacturaPagar - totalPagadoAcumulado, 0);
 
   useEffect(() => { cargarInicial(); }, []);
   useEffect(() => { cargarPacientes(busquedaPaciente); }, [busquedaPaciente]);
@@ -162,6 +178,7 @@ const Facturacion = ({ darkMode = false }) => {
     setFormFactura(modeloFactura); setItems([]); setEmergenciaIds([]); setInternamientoIds([]);
     setLaboratorioSolicitudId(''); setAplicacionesAnticipo([]); setError(''); setMensaje('');
     setBusquedaCatalogo(''); setResultadosCatalogo([]); setModalCatalogoAbierto(false);
+    setPagosAgregados([]); setMetodoPagoInput('efectivo'); setMontoPagoInput(''); setReferenciaPagoInput('');
   }
 
   function volverAInicio() { limpiarFactura(); setFacturaSeleccionada(null); setPantalla('inicio'); }
@@ -251,11 +268,34 @@ const Facturacion = ({ darkMode = false }) => {
     } catch (err) { setError(err.message); }
   }
 
+  // =======================================================
+  // 1. GUARDAR ORDEN (LA SOLUCIÓN PARA QUE NO SALGA 0.00)
+  // =======================================================
   async function guardarFactura(e) {
     e.preventDefault(); setGuardandoFactura(true); setError(''); setMensaje('');
     try {
-      const f = await crearFactura({ ...formFactura, items, usuario_id: usuario?.id || null, emergencia_ids: emergenciaIds, internamiento_ids: internamientoIds, laboratorio_solicitud_id: laboratorioSolicitudId || null, anticipo_aplicaciones: aplicacionesAnticipo });
-      await cargarInicial(); setMensaje('Factura registrada correctamente.'); await abrirFactura(f.id);
+      const f = await crearFactura({ 
+        ...formFactura, 
+        items, 
+        usuario_id: usuario?.id || null, 
+        emergencia_ids: emergenciaIds, 
+        internamiento_ids: internamientoIds, 
+        laboratorio_solicitud_id: laboratorioSolicitudId || null, 
+        anticipo_aplicaciones: aplicacionesAnticipo,
+        total_neto: totalNeto,          // <-- ESTO SOLUCIONA EL 0.00
+        cobertura_total: totalCoberturaItems // <-- ESTO SOLUCIONA EL 0.00
+      });
+      await cargarInicial(); 
+      setMensaje('Orden salvada correctamente.'); 
+      
+      const data = await obtenerFacturaCompleta(f.id);
+      setFacturaSeleccionada(data.factura);
+      setDetalleFactura(data.detalle || []);
+      setPagosAgregados([]);
+      setMetodoPagoInput('efectivo');
+      setMontoPagoInput(data.factura.total_neto);
+      setReferenciaPagoInput('');
+      setPantalla('pagos'); // <-- TE LLEVA A LA PESTAÑA DE PAGO COMO PEDISTE
     } catch (err) { setError(err.message); } finally { setGuardandoFactura(false); }
   }
 
@@ -263,7 +303,21 @@ const Facturacion = ({ darkMode = false }) => {
     try {
       const data = await obtenerFacturaCompleta(id);
       setFacturaSeleccionada(data.factura); setDetalleFactura(data.detalle || []);
-      setPantalla('factura');
+      setPantalla('impresion');
+    } catch (err) { setError(err.message); }
+  }
+  
+  // ABRIR DESDE EL INICIO DIRECTO A PAGO
+  async function abrirCobro(fId) {
+    try {
+      const data = await obtenerFacturaCompleta(fId);
+      setFacturaSeleccionada(data.factura);
+      setDetalleFactura(data.detalle || []);
+      setPagosAgregados([]);
+      setMetodoPagoInput('efectivo');
+      setMontoPagoInput(data.factura.total_neto);
+      setReferenciaPagoInput('');
+      setPantalla('pagos');
     } catch (err) { setError(err.message); }
   }
 
@@ -281,6 +335,70 @@ const Facturacion = ({ darkMode = false }) => {
     if (n === 'parcial') return { ...css.badgeActive, background: '#fff7ed', color: '#c2410c', border: '1px solid #fed7aa' };
     if (n === 'anulada') return { ...css.badgeActive, background: '#fef2f2', color: '#b91c1c', border: '1px solid #fecaca' };
     return { ...css.badgeActive, background: '#eff6ff', color: '#1d4ed8', border: '1px solid #bfdbfe' };
+  }
+
+  async function handleAnularFactura(factura) {
+    if (!window.confirm(`¿Estás seguro de anular la factura ${factura.numero}?`)) return;
+    try {
+      await anularFactura(factura.id, usuario?.id, 'Anulada manualmente');
+      setMensaje(`Factura anulada con éxito.`);
+      await cargarInicial(); 
+    } catch (err) { setError(err.message); }
+  }
+
+  // =======================================================
+  // 2. LÓGICA DE LA VENTANA DE PAGO
+  // =======================================================
+  function handleAgregarLineaPago() {
+    const monto = Number(montoPagoInput);
+    if (monto <= 0) return alert('El monto debe ser mayor a cero.');
+    if (restanteAPagar <= 0) return alert('La factura ya está cubierta.');
+
+    let montoReal = monto;
+    let devuelta = 0;
+
+    if (metodoPagoInput === 'efectivo' && monto > restanteAPagar) {
+      devuelta = monto - restanteAPagar;
+      montoReal = restanteAPagar;
+    } else if (metodoPagoInput !== 'efectivo' && monto > restanteAPagar) {
+      return alert('No puedes cobrar más del restante con Tarjeta o Seguro.');
+    }
+
+    setPagosAgregados([...pagosAgregados, { 
+      metodo: metodoPagoInput, monto_recibido: monto, monto_real: montoReal, 
+      devuelta, referencia: referenciaPagoInput 
+    }]);
+    
+    // Auto rellenar lo que falta
+    const loQueFalta = restanteAPagar - montoReal;
+    setMontoPagoInput(loQueFalta > 0 ? loQueFalta : ''); 
+    setReferenciaPagoInput('');
+  }
+
+  function quitarLineaPago(idx) {
+    setPagosAgregados(pagosAgregados.filter((_, i) => i !== idx));
+  }
+
+  async function confirmarPagoFactura() {
+    if (restanteAPagar > 0) return alert('Debe cubrir el total de la factura antes de confirmar.');
+    setProcesandoPago(true); setError(''); setMensaje('');
+
+    try {
+      for (const pago of pagosAgregados) {
+        await registrarPagoFactura({
+          factura_id: facturaSeleccionada.id, metodo_pago: pago.metodo,
+          monto: pago.monto_real, referencia: pago.referencia || 'N/A', usuario_id: usuario?.id
+        });
+      }
+      
+      const { error: errorUpdate } = await supabase.from('facturas').update({ estado: 'pagada', saldo: 0 }).eq('id', facturaSeleccionada.id);
+      if (errorUpdate) throw errorUpdate;
+
+      setMensaje(`Pago procesado exitosamente.`);
+      await cargarInicial();
+      setPantalla('impresion'); // <-- Y FINALMENTE TE LLEVA A IMPRIMIR
+    } catch (err) { setError(`Error al procesar pago: ${err.message}`); } 
+    finally { setProcesandoPago(false); }
   }
 
   const css = {
@@ -331,7 +449,8 @@ const Facturacion = ({ darkMode = false }) => {
           <div style={css.tabContainer}>
             <button style={css.tabBtn(pantalla === 'inicio')} onClick={volverAInicio}>Inicio</button>
             <button style={css.tabBtn(pantalla === 'editor')} onClick={nuevaFacturaDirecta}>Órdenes</button>
-            <button style={css.tabBtn(pantalla === 'factura')} onClick={() => setPantalla('factura')}>Factura / Pago</button>
+            <button style={css.tabBtn(pantalla === 'pagos')} disabled={!facturaSeleccionada || (facturaSeleccionada.estado !== 'pendiente' && facturaSeleccionada.estado !== 'parcial')} onClick={() => setPantalla('pagos')}>Pagos</button>
+            <button style={css.tabBtn(pantalla === 'impresion')} disabled={!facturaSeleccionada} onClick={() => setPantalla('impresion')}>Impresión</button>
           </div>
         </div>
 
@@ -411,7 +530,12 @@ const Facturacion = ({ darkMode = false }) => {
                           <td style={css.td}>
                             <div style={{ display: 'flex', gap: '8px' }}>
                               <button style={css.tableBtnEdit} onClick={() => abrirFactura(f.id)}>Ver</button>
-                              {f.estado !== 'anulada' && <button style={css.tableBtnDelete} onClick={() => alert("Función de anular no activada aquí directamente")}>Anular</button>}
+                              {(f.estado === 'pendiente' || f.estado === 'parcial') && (
+                                <button style={{...css.tableBtnEdit, background: '#dcfce7', color: '#15803d', borderColor: '#bbf7d0'}} onClick={() => abrirCobro(f.id)}>Cobrar</button>
+                              )}
+                              {f.estado !== 'anulada' && (
+                                <button style={css.tableBtnDelete} onClick={() => handleAnularFactura(f)}>Anular</button>
+                              )}
                             </div>
                           </td>
                         </tr>
@@ -550,6 +674,7 @@ const Facturacion = ({ darkMode = false }) => {
           </div>
         )}
 
+        {/* EL SEGURO DEL CATÁLOGO PARA EVITAR LA PANTALLA BLANCA */}
         {modalCatalogoAbierto && pantalla === 'editor' && (
           <div style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.6)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }} onClick={cerrarModalCatalogo}>
             <div style={{ width: '900px', maxHeight: '80vh', background: '#fff', borderRadius: '16px', overflow: 'hidden', display: 'flex', flexDirection: 'column' }} onClick={(e) => e.stopPropagation()}>
@@ -567,7 +692,7 @@ const Facturacion = ({ darkMode = false }) => {
                     {cargandoCatalogo ? (<tr><td colSpan="5" style={css.td}>Buscando...</td></tr>) : resultadosCatalogo.length === 0 ? (<tr><td colSpan="5" style={css.td}>Sin resultados.</td></tr>) : (
                       resultadosCatalogo.map((item, i) => (
                         <tr key={i}>
-                          <td style={css.td}>{item.tipo.toUpperCase()}</td>
+                          <td style={css.td}>{String(item.tipo_item || '').toUpperCase()}</td>
                           <td style={css.td}>{item.codigo_mostrar}</td>
                           <td style={css.td}>{item.descripcion}</td>
                           <td style={css.td}>RD$ {item.precio.toFixed(2)}</td>
@@ -582,7 +707,92 @@ const Facturacion = ({ darkMode = false }) => {
           </div>
         )}
 
-        {pantalla === 'factura' && facturaSeleccionada && (
+        {/* ========================================================================= */}
+        {/* LA NUEVA PESTAÑA DE PAGOS */}
+        {/* ========================================================================= */}
+        {pantalla === 'pagos' && facturaSeleccionada && (
+          <div style={{ marginTop: '20px', display: 'grid', gridTemplateColumns: '1fr 350px', gap: '20px' }}>
+            <div style={css.box}>
+               <h2 style={{marginTop: 0, color: '#1e3a8a'}}>Registro de Pagos - Orden {facturaSeleccionada.numero}</h2>
+               <div style={{background: '#f8fafc', padding: '15px', borderRadius: '8px', display: 'flex', justifyContent: 'space-between', marginBottom: '20px', border: '1px solid #e5e7eb'}}>
+                  <div>
+                     <span style={{fontSize: '12px', color: '#64748b', fontWeight: 'bold'}}>PACIENTE</span>
+                     <div style={{fontSize: '16px', fontWeight: 'bold'}}>{nombrePacienteFactura(facturaSeleccionada)}</div>
+                  </div>
+                  <div style={{textAlign: 'right'}}>
+                     <span style={{fontSize: '12px', color: '#64748b', fontWeight: 'bold'}}>TOTAL FACTURA</span>
+                     <div style={{fontSize: '22px', fontWeight: '900', color: '#0f172a'}}>RD$ {totalFacturaPagar.toFixed(2)}</div>
+                  </div>
+               </div>
+
+               <h3 style={{borderBottom: '1px solid #e5e7eb', paddingBottom: '10px'}}>Añadir Método de Cobro</h3>
+               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px' }}>
+                  <div>
+                    <label style={css.label}>Forma de Pago:</label>
+                    <select style={css.inputRounded} value={metodoPagoInput} onChange={e => {
+                        setMetodoPagoInput(e.target.value);
+                        if(e.target.value === 'efectivo' && restanteAPagar > 0) setMontoPagoInput(restanteAPagar);
+                    }}>
+                      <option value="efectivo">💵 Efectivo</option>
+                      <option value="tarjeta_debito">💳 Tarjeta de Débito/Crédito</option>
+                      <option value="transferencia">🏦 Transferencia Bancaria</option>
+                      <option value="seguro_ars">🛡️ Diferencia Seguro ARS</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label style={css.label}>Monto Recibido (RD$):</label>
+                    <input type="number" style={css.inputRounded} value={montoPagoInput} onChange={e => setMontoPagoInput(e.target.value)} placeholder="0.00" />
+                  </div>
+               </div>
+               
+               {metodoPagoInput !== 'efectivo' && (
+                 <div style={{marginTop: '15px'}}>
+                   <label style={css.label}>Referencia (Autorización o Voucher):</label>
+                   <input style={css.inputRounded} value={referenciaPagoInput} onChange={e => setReferenciaPagoInput(e.target.value)} placeholder="Ej: Últimos 4 dígitos o código" />
+                 </div>
+               )}
+
+               <button style={{...css.btnBlue, marginTop: '20px'}} onClick={handleAgregarLineaPago}>+ Añadir a la cuenta</button>
+
+               <h3 style={{borderBottom: '1px solid #e5e7eb', paddingBottom: '10px', marginTop: '30px'}}>Pagos Registrados</h3>
+               <table style={css.table}>
+                 <thead><tr><th style={css.th}>Método</th><th style={css.th}>Monto Aplicado</th><th style={css.th}>Devuelta</th><th style={css.th}></th></tr></thead>
+                 <tbody>
+                   {pagosAgregados.length === 0 ? <tr><td colSpan="4" style={css.td}>No hay pagos registrados.</td></tr> : 
+                     pagosAgregados.map((p, idx) => (
+                       <tr key={idx}>
+                         <td style={css.td}>{p.metodo.toUpperCase()} {p.referencia ? `[${p.referencia}]` : ''}</td>
+                         <td style={css.td}>RD$ {p.monto_real.toFixed(2)}</td>
+                         <td style={css.td}>{p.devuelta > 0 ? <span style={{color:'green', fontWeight:'bold'}}>RD$ {p.devuelta.toFixed(2)}</span> : '-'}</td>
+                         <td style={css.td}><button style={css.tableBtnDelete} onClick={() => quitarLineaPago(idx)}>X</button></td>
+                       </tr>
+                     ))
+                   }
+                 </tbody>
+               </table>
+            </div>
+
+            <div style={css.box}>
+               <h3 style={{marginTop: 0, color: '#1e3a8a'}}>Resumen de Caja</h3>
+               <div style={{ display: 'flex', justifyContent: 'space-between', padding: '10px 0', borderBottom: '1px solid #eee' }}><span>Monto a Cobrar</span><span>RD$ {totalFacturaPagar.toFixed(2)}</span></div>
+               <div style={{ display: 'flex', justifyContent: 'space-between', padding: '10px 0', borderBottom: '1px solid #eee' }}><span>Pagos Añadidos</span><span style={{color:'green', fontWeight:'bold'}}>RD$ {totalPagadoAcumulado.toFixed(2)}</span></div>
+               
+               <div style={{ background: restanteAPagar === 0 ? '#dcfce7' : '#fef2f2', padding: '20px', borderRadius: '8px', textAlign: 'center', marginTop: '20px' }}>
+                 <div style={{fontSize: '13px', fontWeight: 'bold', color: restanteAPagar === 0 ? '#166534' : '#991b1b'}}>RESTANTE POR PAGAR</div>
+                 <div style={{fontSize: '32px', fontWeight: '900', color: restanteAPagar === 0 ? '#15803d' : '#b91c1c'}}>RD$ {restanteAPagar.toFixed(2)}</div>
+               </div>
+
+               <button style={{ background: '#16a34a', color: '#fff', padding: '15px', borderRadius: '8px', fontWeight: 'bold', border: 'none', cursor: 'pointer', width: '100%', marginTop: '20px', opacity: restanteAPagar > 0 ? 0.5 : 1 }} onClick={confirmarPagoFactura} disabled={restanteAPagar > 0 || procesandoPago}>
+                 {procesandoPago ? 'Procesando...' : 'Finalizar y Facturar'}
+               </button>
+            </div>
+          </div>
+        )}
+
+        {/* ========================================================================= */}
+        {/* PANTALLA IMPRESION */}
+        {/* ========================================================================= */}
+        {pantalla === 'impresion' && facturaSeleccionada && (
            <div style={css.box}>
              <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'20px'}}>
                <div>
@@ -594,15 +804,20 @@ const Facturacion = ({ darkMode = false }) => {
                  <div style={{ fontSize: '11px', color: '#64748b', marginTop: '4px' }}>Escanea en Lab</div>
                </div>
                <div style={{textAlign:'right'}}>
-                 <h1 style={{margin:0, color: '#0f172a'}}>Total Neto: RD$ {Number(facturaSeleccionada.total_neto).toFixed(2)}</h1>
-                 <h3 style={{margin:0, color: '#dc2626'}}>Saldo Pendiente: RD$ {Number(facturaSeleccionada.saldo).toFixed(2)}</h3>
+                 <h1 style={{margin:0, color: '#0f172a'}}>Total Pagado: RD$ {Number(facturaSeleccionada.total_neto).toFixed(2)}</h1>
+                 <h3 style={{margin:0, color: '#16a34a'}}>ESTADO: PAGADA</h3>
                </div>
              </div>
-             <button style={css.btnBlue} onClick={imprimirFacturaActual}>🖨️ Imprimir Factura</button>
+             
+             <div style={{ display: 'flex', gap: '10px' }}>
+               <button style={css.btnBlue} onClick={imprimirFacturaActual}>🖨️ Imprimir Factura</button>
+               <button style={{...css.btnBlue, background: '#475569'}} onClick={volverAInicio}>Volver al Inicio</button>
+             </div>
            </div>
         )}
       </div>
 
+      {/* SECCIÓN FÍSICA PARA LA IMPRESORA */}
       {facturaSeleccionada && (
         <div id="seccion-impresion-factura">
           <div style={{ textAlign: 'center', borderBottom: '2px dashed #000', paddingBottom: '10px', marginBottom: '15px' }}>

@@ -1,5 +1,35 @@
 import { supabase } from '../lib/supabaseClient';
 
+// --- FUNCIONES PARA LOS CATÁLOGOS ---
+export async function listarDiagnosticos() {
+  const { data, error } = await supabase
+    .from('diagnosticos')
+    .select('id, codigo, nombre')
+    .order('nombre', { ascending: true })
+    .limit(1000); 
+  if (error) throw new Error(error.message);
+  return data || [];
+}
+
+export async function listarMotivosConsulta() {
+  const { data, error } = await supabase
+    .from('motivos_consulta')
+    .select('id, nombre')
+    .order('nombre', { ascending: true });
+  if (error) throw new Error(error.message);
+  return data || [];
+}
+
+export async function listarProcesosClinicos() {
+  const { data, error } = await supabase
+    .from('procesos_clinicos')
+    .select('id, codigo, nombre')
+    .eq('activo', true)
+    .order('nombre', { ascending: true });
+  if (error) throw new Error(error.message);
+  return data || [];
+}
+
 /* =========================================================
    HELPERS
 ========================================================= */
@@ -388,9 +418,12 @@ export async function listarEmergenciasAbiertas() {
       id,
       paciente_id,
       medico_id,
-      diagnostico,
-      motivo,
-      tratamiento,
+      diagnostico_principal_id,
+      diagnostico_nota,
+      motivo_id,
+      motivo_nota,
+      tratamiento_principal_id,
+      tratamiento_nota,
       estado,
       estado_clinico,
       fecha_ingreso,
@@ -406,7 +439,9 @@ export async function listarEmergenciasAbiertas() {
         codigo,
         nombre,
         apellido
-      )
+      ),
+      motivos_consulta ( id, nombre ),
+      diagnosticos ( id, codigo, nombre )
     `)
     .or('estado.eq.abierta,estado.eq.abierto,estado_clinico.eq.abierta')
     .order('fecha_ingreso', { ascending: false });
@@ -463,7 +498,10 @@ export async function listarInternamientos(filtros = {}) {
       paciente_id,
       cama_id,
       medico_id,
-      diagnostico_ingreso,
+      diagnostico_ingreso_id,
+      diagnostico_ingreso_nota,
+      motivo_ingreso_id,
+      motivo_ingreso_nota,
       nota_ingreso,
       autorizacion_numero,
       fecha_ingreso,
@@ -533,7 +571,9 @@ export async function listarInternamientos(filtros = {}) {
           piso,
           activa
         )
-      )
+      ),
+      diagnosticos ( id, codigo, nombre ),
+      motivos_consulta ( id, nombre )
     `)
     .order('fecha_ingreso', { ascending: false });
 
@@ -552,7 +592,7 @@ export async function listarInternamientos(filtros = {}) {
   if (filtros.filtro?.trim()) {
     const texto = filtros.filtro.trim();
     query = query.or(
-      `diagnostico_ingreso.ilike.%${texto}%,nota_ingreso.ilike.%${texto}%,autorizacion_numero.ilike.%${texto}%,origen_ingreso.ilike.%${texto}%`
+      `diagnostico_ingreso_nota.ilike.%${texto}%,motivo_ingreso_nota.ilike.%${texto}%,nota_ingreso.ilike.%${texto}%,autorizacion_numero.ilike.%${texto}%,origen_ingreso.ilike.%${texto}%`
     );
   }
 
@@ -564,6 +604,7 @@ export async function listarInternamientos(filtros = {}) {
 
   return (data || []).map(mapearInternamientoConSeguro);
 }
+
 export async function obtenerInternamientoPorId(id) {
   const { data, error } = await supabase
     .from('internamientos')
@@ -572,7 +613,10 @@ export async function obtenerInternamientoPorId(id) {
       paciente_id,
       cama_id,
       medico_id,
-      diagnostico_ingreso,
+      diagnostico_ingreso_id,
+      diagnostico_ingreso_nota,
+      motivo_ingreso_id,
+      motivo_ingreso_nota,
       nota_ingreso,
       autorizacion_numero,
       fecha_ingreso,
@@ -642,7 +686,9 @@ export async function obtenerInternamientoPorId(id) {
           piso,
           activa
         )
-      )
+      ),
+      diagnosticos ( id, codigo, nombre ),
+      motivos_consulta ( id, nombre )
     `)
     .eq('id', id)
     .single();
@@ -653,6 +699,7 @@ export async function obtenerInternamientoPorId(id) {
 
   return mapearInternamientoConSeguro(data);
 }
+
 export async function crearInternamiento(payload) {
   if (!payload.paciente_id) {
     throw new Error('Debe seleccionar un paciente.');
@@ -683,7 +730,10 @@ export async function crearInternamiento(payload) {
     paciente_id: payload.paciente_id,
     cama_id: camaAsignadaId,
     medico_id: payload.medico_id || null,
-    diagnostico_ingreso: payload.diagnostico_ingreso?.trim() || '',
+    diagnostico_ingreso_id: payload.diagnostico_ingreso_id || null,
+    diagnostico_ingreso_nota: payload.diagnostico_ingreso_nota?.trim() || '',
+    motivo_ingreso_id: payload.motivo_ingreso_id || null,
+    motivo_ingreso_nota: payload.motivo_ingreso_nota?.trim() || '',
     nota_ingreso: payload.nota_ingreso?.trim() || '',
     autorizacion_numero: payload.autorizacion_numero?.trim() || null,
     estado: 'activo',
@@ -756,7 +806,10 @@ export async function actualizarInternamiento(id, payload, internamientoAnterior
     paciente_id: payload.paciente_id,
     cama_id: camaNuevaId || null,
     medico_id: payload.medico_id || null,
-    diagnostico_ingreso: payload.diagnostico_ingreso?.trim() || '',
+    diagnostico_ingreso_id: payload.diagnostico_ingreso_id || null,
+    diagnostico_ingreso_nota: payload.diagnostico_ingreso_nota?.trim() || '',
+    motivo_ingreso_id: payload.motivo_ingreso_id || null,
+    motivo_ingreso_nota: payload.motivo_ingreso_nota?.trim() || '',
     nota_ingreso: payload.nota_ingreso?.trim() || '',
     autorizacion_numero: payload.autorizacion_numero?.trim() || null,
     estado: estadoNormalizado,
